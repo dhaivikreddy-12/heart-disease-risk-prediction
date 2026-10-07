@@ -1,66 +1,95 @@
-"""Train and compare models on heart disease data with cross-validation."""
+"""Train and compare models on the real Heart Disease dataset."""
 import argparse
-import pandas as pd
 import numpy as np
-from sklearn.model_selection import cross_val_score, train_test_split
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import roc_auc_score, classification_report
+from sklearn.metrics import roc_auc_score, accuracy_score, classification_report
 from xgboost import XGBClassifier
 
-df = pd.read_csv("data/heart.csv")
-print(f"Loaded {len(df)} patients")
-print(df.describe().round(1))
+from src.load_data import load
 
-X = df.drop(columns=["target"])
-y = df["target"]
+TARGET = "target"
+
+df = load()
+print(f"Loaded {len(df)} patients, columns: {list(df.columns)}")
+print(f"Disease rate: {df[TARGET].mean():.1%}")
+print(f"Missing values per column: {df.isna().sum()[df.isna().sum() > 0].to_dict()}")
+
+X = df.drop(columns=[TARGET])
+y = df[TARGET]
 
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
-scaler = StandardScaler().fit(X_train)
-X_train_s = scaler.transform(X_train)
-X_test_s = scaler.transform(X_test)
 
 models = {
-    "LogisticRegression": LogisticRegression(max_iter=1000),
-    "RandomForest": RandomForestClassifier(n_estimators=200, random_state=42),
-    "XGBoost": XGBClassifier(n_estimators=200, random_state=42, use_label_encoder=False, eval_metric="logloss"),
+    "LogisticRegression": LogisticRegression(max_iter=2000),
+    "RandomForest": RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1),
+    "XGBoost": XGBClassifier(
+        n_estimators=300, random_state=42, eval_metric="logloss",
+        use_label_encoder=False, tree_method="hist",
+    ),
 }
 
-print("\n=== Cross-validation AUC (5-fold) ===")
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+print("\n=== Cross-validated AUC (5-fold) ===")
+results = {}
 for name, model in models.items():
-    cv = cross_val_score(model, X, y, cv=5, scoring="roc_auc")
-    model.fit(X_train_s, y_train)
-    y_prob = model.predict_proba(X_test_s)[:, 1]
-    auc = roc_auc_score(y_test, y_prob)
-    print(f"{name:<20} CV AUC: {cv.mean():.3f} (+/- {cv.std():.3f}) | Test AUC: {auc:.3f}")
+    # The real Cleveland data has a handful of missing values in
+    # major_vessels / thalassemia, so imputation is part of the pipeline.
+    pipe = Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler()), ("clf", model)])
+    scores = cross_val_score(pipe, X, y, cv=cv, scoring="roc_auc")
+    pipe.fit(X_train, y_train)
+    y_prob = pipe.predict_proba(X_test)[:, 1]
+    test_auc = roc_auc_score(y_test, y_prob)
+    results[name] = (pipe, scores.mean())
+    print(f"{name:<20} CV AUC {scores.mean():.3f} (+/- {scores.std():.3f}) | Test AUC {test_auc:.3f}")
 
-best = RandomForestClassifier(n_estimators=300, random_state=42)
-best.fit(X_train_s, y_train)
-importance = pd.Series(best.feature_importances_, index=X.columns).sort_values(ascending=False)
-print("\n=== Feature importance (Random Forest) ===")
+best_name = max(results, key=lambda k: results[k][1])
+pipe = results[best_name][0]
+y_pred = pipe.predict(X_test)
+print(f"\nBest by CV: {best_name}")
+print(classification_report(y_test, y_pred, target_names=["no disease", "disease"], digits=4))
+
+clf = pipe.named_steps["clf"]
+if hasattr(clf, "feature_importances_"):
+    raw = clf.feature_importances_
+else:
+    raw = np.abs(clf.coef_.ravel())
+importance = pd.Series(raw, index=X.columns).sort_values(ascending=False)
+print("=== Feature importance ===")
 for feat, val in importance.items():
-    print(f"{feat:<10} {val:.3f}")
+    print(f"{feat:<26} {val:.3f}")
 
-
-def predict_patient(age, sex, cp, trestbps, chol, thalach, exang):
-    scaler = StandardScaler().fit(X)
-    model = LogisticRegression(max_iter=1000).fit(scaler.transform(X), y)
-    row = scaler.transform([[age, sex, cp, trestbps, chol, thalach, exang]])
-    prob = model.predict_proba(row)[0][1]
-    return prob
-
+importance.plot(kind="barh", color="#c44e52")
+plt.xlabel("Importance")
+plt.title("Feature Importance - Heart Disease")
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.savefig("importance.png", dpi=120)
+print("Saved plot to importance.png")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Predict heart disease risk")
-    for f in ["age", "sex", "cp", "trestbps", "chol", "thalach", "exang"]:
-        parser.add_argument(f"--{f}", type=float, required=False)
+    for col in X.columns:
+        parser.add_argument(f"--{col}", type=float, required=False)
     args = parser.parse_args()
 
-    if args.age is not None:
-        prob = predict_patient(args.age, args.sex, args.cp, args.trestbps,
-                               args.chol, args.thalach, args.exang)
+    missing = [c for c in X.columns if getattr(args, c) is None]
+    if missing:
+        print(f"Missing features: {', '.join(missing)}")
+        parser.print_help()
+    else:
+        row = pd.DataFrame([{c: getattr(args, c) for c in X.columns}])
+        prob = pipe.predict_proba(row)[0][1]
         print(f"\nEstimated heart disease risk: {prob:.1%}")
-        print("High risk - recommend screening" if prob > 0.5 else "Lower risk")
+        print("(Screening estimate only - not a diagnosis)")

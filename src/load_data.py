@@ -1,44 +1,47 @@
-"""Generate a synthetic heart-disease style dataset."""
+"""Load the real UCI Heart Disease (Cleveland) dataset - 303 patients, 13 attributes.
+
+Source: OpenML 'cleveland', the canonical UCI Cleveland heart disease records
+with real clinical values (age, cholesterol, max heart rate, ...).
+Cached to data/heart.csv so the repo runs offline after the first run.
+"""
 import os
-import numpy as np
 import pandas as pd
 
-rng = np.random.default_rng(303)
+CSV_PATH = "data/heart.csv"
 
-n = 300
-age = rng.integers(29, 77, n)
-sex = rng.binomial(1, 0.65, n)
-cp = rng.integers(0, 4, n)
-trestbps = np.clip(rng.normal(130, 18, n), 90, 200).round(0)
-chol = np.clip(rng.normal(230, 45, n), 100, 400).round(0)
-thalach = np.clip(rng.normal(150, 23, n), 70, 200).round(0)
-exang = rng.binomial(1, 0.33, n)
+RENAME = {
+    "fbs": "fasting_blood_sugar",
+    "restecg": "resting_ecg",
+    "thalach": "max_heart_rate",
+    "exang": "exercise_induced_angina",
+    "oldpeak": "st_depression",
+    "ca": "major_vessels",
+    "thal": "thalassemia",
+}
 
-logit = (
-    -2.6
-    + 0.18 * (age - 50) / 10
-    + 1.4 * sex
-    + 2.2 * (cp >= 2)
-    + 0.09 * (trestbps - 130) / 10
-    + 0.07 * (chol - 230) / 20
-    - 0.18 * (thalach - 150) / 10
-    + 1.9 * exang
-    + rng.normal(0, 0.28, size=n)
-)
-prob = 1 / (1 + np.exp(-logit))
-target = (rng.random(n) < prob).astype(int)
 
-df = pd.DataFrame({
-    "age": age,
-    "sex": sex,
-    "cp": cp,
-    "trestbps": trestbps,
-    "chol": chol,
-    "thalach": thalach,
-    "exang": exang,
-    "target": target,
-})
+def load():
+    if os.path.exists(CSV_PATH):
+        return pd.read_csv(CSV_PATH)
 
-os.makedirs("data", exist_ok=True)
-df.to_csv("data/heart.csv", index=False)
-print(f"Generated {len(df)} patients. Disease rate: {df['target'].mean():.1%}")
+    from sklearn.datasets import fetch_openml
+
+    bunch = fetch_openml(name="cleveland", version=1, as_frame=True, parser="auto")
+    df = bunch.frame.copy()
+    df = df.rename(columns=RENAME)
+
+    # The Cleveland file uses 'num' (0 = no disease, 1-4 = severity).
+    target_col = "num" if "num" in df.columns else "target"
+    df["target"] = (df[target_col].astype(float) > 0).astype(int)
+    df = df.drop(columns=[c for c in ["num", "dataset"] if c in df.columns])
+
+    os.makedirs("data", exist_ok=True)
+    df.to_csv(CSV_PATH, index=False)
+    return df
+
+
+if __name__ == "__main__":
+    df = load()
+    print(f"Loaded {len(df)} patients -> {CSV_PATH}")
+    print(f"Disease rate: {df['target'].mean():.1%}")
+    print(df.head())

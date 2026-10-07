@@ -1,56 +1,82 @@
 # ❤️ Heart Disease Risk Prediction
 
-> *"Data can't diagnose you — but it can flag who needs a closer look."*
+> *"Data can't diagnose you. It can flag who deserves a closer look."*
 
-An intermediate medical-style classification project. Using a well-known heart disease dataset, it predicts whether a patient is at risk and — just as importantly — which clinical features matter most. I was careful to frame it as a screening tool, not a diagnosis.
+An intermediate medical-style classification project on the **UCI Cleveland Heart Disease** dataset — 303 real patients, 13 clinical attributes. This was also the project that taught me to care about missing data: the real dataset has genuinely absent values, and my synthetic version never did.
 
 ## What this project does
 
-- Loads a classic heart disease dataset (~300 patients, 13 features).
-- Cleans and standardizes it.
-- Trains **Logistic Regression**, **Random Forest**, and **XGBoost**.
-- Compares models with accuracy, AUC, and cross-validation.
-- Shows feature importance to explain the model's decisions.
-- Provides a simple `predict()` function.
+- Loads the real Cleveland heart disease dataset (303 patients, 13 attributes).
+- Detects and reports missing values instead of silently dropping them.
+- Imputes missing values with the median inside a `Pipeline` (never before the split).
+- Trains Logistic Regression, Random Forest, and XGBoost.
+- Reports cross-validated AUC across 5 stratified folds, not one lucky split.
+- Ranks features by importance and includes a CLI for individual screening.
 
 ## The dataset
 
-The Cleveland Heart Disease dataset, a standard benchmark in medical ML:
+[UCI Heart Disease (Cleveland)](https://archive.ics.uci.edu/dataset/45/heart+disease) via OpenML — 303 patients.
 
-| Feature            | Description                     |
-|--------------------|---------------------------------|
-| `age`              | Age in years                    |
-| `sex`              | 1 = male, 0 = female            |
-| `cp`               | Chest pain type (0–3)           |
-| `trestbps`         | Resting blood pressure          |
-| `chol`             | Serum cholesterol (mg/dl)       |
-| `thalach`          | Max heart rate achieved         |
-| `exang`            | Exercise-induced angina (1/0)   |
-| `target`           | 1 = disease present, 0 = absent |
+| Feature | Description |
+|---|---|
+| `age`, `sex` | Patient demographics |
+| `cp` | Chest pain type (0–3) |
+| `trestbps` | Resting blood pressure |
+| `chol` | Serum cholesterol (mg/dl) |
+| `max_heart_rate` | Maximum heart rate achieved |
+| `st_depression` | ST depression induced by exercise |
+| `major_vessels`, `thalassemia` | Vessel and thalassemia indicators |
+| `target` | 1 = disease present — **target** (45.9% positive) |
+
+The real dataset has **4 missing** `major_vessels` and **2 missing** `thalassemia` values. The code prints this out and handles it.
 
 ## How to run it
 
 ```bash
 pip install -r requirements.txt
 
-# Full pipeline: train + compare models
 python heart.py
 
-# Single patient prediction
-python heart.py --age 55 --sex 1 --cp 2 --trestbps 140 --chol 240 --thalach 150 --exang 0
+# Screen a single patient
+python -m src.train_model --age 63 --sex 1 --cp 1 --trestbps 145 --chol 233 \
+    --fasting_blood_sugar 1 --resting_ecg 2 --max_heart_rate 150 \
+    --exercise_induced_angina 0 --st_depression 2.3 --slope 3 --major_vessels 0 --thalassemia 6
+```
+
+## Project structure
+
+```
+heart-disease-risk-prediction/
+├── data/
+│   └── heart.csv
+├── src/
+│   ├── load_data.py   # fetch + cache
+│   └── train_model.py # impute + scale + CV + comparison
+├── tests/
+├── heart.py
+├── requirements.txt
+└── README.md
 ```
 
 ## What I learned
 
-- How to compare models with cross-validation instead of one lucky split.
-- That logistic regression stays relevant in medicine because it's *explainable*.
-- How to interpret ROC/AUC honestly.
-- The responsibility that comes with medical-adjacent ML — ethics matter.
+- Why cross-validation matters: one split on 303 patients can swing AUC by 0.1.
+- That missing values are normal, and imputing inside the pipeline prevents leakage.
+- How to read coefficients *and* feature importances, and why logistic regression is often preferred in medicine — you can explain it.
+- That the features this model ranks highest match what cardiologists already prioritise, which is the best sanity check there is.
 
 ## Results
 
-The best models reach **~0.78 AUC** on cross-validation. Chest pain type and cholesterol consistently come out as top predictors, matching what cardiologists already know — always a good sanity check.
+5-fold stratified cross-validation plus a 20% held-out test split:
+
+| Model | CV AUC | Test AUC |
+|---|---|---|
+| **LogisticRegression** | **0.912** (±0.018) | 0.951 |
+| RandomForest | 0.910 (±0.023) | **0.958** |
+| XGBoost | 0.885 (±0.018) | 0.908 |
+
+Test accuracy 0.869. Top features by importance: `thalassemia` (0.678), `cp` — chest pain type (0.543), `max_heart_rate` (0.348), `chol` (0.215).
 
 ---
 
-*Built with Python, pandas, scikit-learn, XGBoost. Made for learning, by a student, for students.*
+*Built with Python, pandas, scikit-learn, XGBoost, matplotlib. Real clinical data, honestly measured. Screening tool only — not a diagnosis.*
